@@ -248,26 +248,51 @@ def get_reflect_prompt(instruction, width, height, keyboard1, keyboard2, operati
     return prompt
 
 
-# 更新记忆单元
-def get_memory_prompt(insight, instruction, current_app_id, current_subtask, reflect_thought, operation, action):
-    prompt = ""
-    prompt += "You are a memory writer for a mobile GUI agent.\n"
-    prompt += "Write reusable, high-level guidance for future executions.\n"
-    prompt += "Do NOT include coordinates.\n\n"
-    prompt += f"Instruction: {instruction}\n"
-    prompt += f"App category: {current_app_id}\n"
-    prompt += f"Subtask: {current_subtask}\n"
-    prompt += f"Executed operation: {operation}\n"
-    prompt += f"Executed action: {action}\n"
-    prompt += f"Reflection thought: {reflect_thought}\n"
-    if insight:
-        prompt += f"Extra insight to remember: {insight}\n"
-    prompt += "\nOutput STRICT JSON only:\n"
+# memory
+def get_memory_prompt(
+    instruction: str,
+    current_app_name: str,
+    current_subtask: str,
+    reflect_thought: str,
+    operation: str,
+    action: str
+):
+    """
+    Long-term Skill Memory writer prompt.
+    Output STRICT JSON only. No coordinates. No step-by-step for the whole instruction.
+    Focus on reusable guidance for similar subtasks in the same app category.
+    """
+    prompt = "You are writing LONG-TERM SKILL MEMORY for a mobile GUI agent.\n"
+    prompt += "This memory will be reused across many future tasks, not just this session.\n\n"
+
+    prompt += "### CONTEXT (for grounding only) ###\n"
+    prompt += f"App category (memory namespace): {current_app_name}\n"
+    prompt += f"Current subtask (from planner): {current_subtask}\n"
+    prompt += f"User instruction (original, may be long): {instruction}\n"
+    prompt += f"Executed action (may include coordinates): {action}\n"
+    prompt += f"Executed operation description: {operation}\n"
+    prompt += f"Reflection thought (why it worked): {reflect_thought}\n"
+
+    prompt += "=== WHAT TO WRITE ===\n"
+    prompt += "Write a reusable skill entry that helps the agent complete similar subtasks in the SAME app category in the future.\n"
+    prompt += "The entry must be short, stable, and not dependent on this exact screen layout.\n\n"
+
+    prompt += "=== HARD RULES ===\n"
+    prompt += "1) Do NOT include any coordinates (x,y) or pixel numbers.\n"
+    prompt += "2) Do NOT mention specific one-off UI states like transient popups unless truly general.\n"
+    prompt += "3) Prefer semantic cues: menu names, settings section names, icons meaning, search keywords.\n"
+    prompt += "4) If there are multiple common UI variants, mention alternatives briefly.\n"
+    prompt += "5) Keep each field concise (1-3 sentences max).\n\n"
+
+    prompt += "=== OUTPUT (STRICT JSON ONLY) ===\n"
     prompt += """{
-  "hint": "<short reusable guidance>",
-  "when_to_use": "<conditions>",
-  "avoid": "<common mistakes>"
+  "canonical_subtask": "<a normalized short description of the subtask>",
+  "when_to_use": "<when this skill applies (conditions, app page context, keywords)>",
+  "hint": "<reusable operational guidance: how to locate the target and what to do>",
+  "avoid": "<common mistakes or wrong paths to avoid>"
 }"""
+
     return prompt
+
 
 
