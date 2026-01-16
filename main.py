@@ -30,8 +30,6 @@ add_info = ""
 # "If the last operation produced no change, do not choose the same coordinates again."
 
 # GPT API URL and token
-api_url = "https://api.openai.com/v1/chat/completions"
-key = "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"
 
 
 def extract_json_obj(text: str) -> dict:
