@@ -2,6 +2,8 @@ import os, re
 import time
 import json
 from PIL import Image
+import difflib
+import hashlib
 
 import controller
 from api import call
@@ -33,10 +35,10 @@ add_info = ""
 api_url = ""
 key = ""
 
+
 def extract_json_obj(text: str) -> dict:
-    """n
-    Extract the first JSON object from model output. Enforces robustness when the model
-    accidentally adds extra tokens.
+    """
+    Extract the first JSON object from model output. Enforces robustness when the model accidentally adds extra tokens.
     """
     m = re.search(r"\{.*\}", text, flags=re.S)
     if not m:
@@ -44,18 +46,14 @@ def extract_json_obj(text: str) -> dict:
     return json.loads(m.group(0))
 
 
-import difflib
-import hashlib
-
-
-def normalize_text(s: str) -> str:
+def normalize_text(s: str) -> str:  # 抽取中英文文字
     s = (s or "").lower()
     s = re.sub(r"[^a-z0-9\u4e00-\u9fff]+", " ", s)   # 中英数字保留
     s = re.sub(r"\s+", " ", s).strip()
     return s
 
 
-def similarity(a: str, b: str) -> float:  # 轻量的匹配，判断词是否一样，形状是否类似
+def similarity(a: str, b: str) -> float:  # 轻量的匹配，判断单词是否一样，形状是否类似
     na, nb = normalize_text(a), normalize_text(b)
     if not na or not nb:
         return 0.0
@@ -66,13 +64,15 @@ def similarity(a: str, b: str) -> float:  # 轻量的匹配，判断词是否一
     return 0.6 * jacc + 0.4 * seq
 
 
-def make_skill_key(app_name: str, canonical_desc: str) -> str:
+def make_skill_key(app_name: str, canonical_desc: str) -> str:  # 为子任务生成唯一的key，来辨别
     base = normalize_text(canonical_desc)
     h = hashlib.md5((app_name + "||" + base).encode("utf-8")).hexdigest()[:10]  # 截断避免太长
     return f"{base[:50]}__{h}"
 
 
 def retrieve_skill_matches(memory_db, app_name: str, query_subtask: str, top_k=3, min_score=0.35):
+    # TODO 考虑优化
+    # 从记忆中匹配，按照相似度得分计算top k
     matches = []
     app_mem = memory_db.get(app_name, {})
     for skill_key, rec in app_mem.items():
@@ -84,7 +84,7 @@ def retrieve_skill_matches(memory_db, app_name: str, query_subtask: str, top_k=3
     matches.sort(reverse=True, key=lambda x: x[0])
     return matches[:top_k]
 
-
+# TODO 放在决策的prompt中
 def format_memory_for_prompt(matches):
     if not matches:
         return ""
@@ -102,8 +102,6 @@ def format_memory_for_prompt(matches):
     return "\n".join(lines)
 
 
-
-
 def upsert_skill_success(app_name, subtask, hint_json_text):
     memory_db.setdefault(app_name, {})
     # 如果本轮已有匹配 skill，就更新那个；否则新建
@@ -113,6 +111,7 @@ def upsert_skill_success(app_name, subtask, hint_json_text):
         skill_key = make_skill_key(app_name, subtask)
         rec = memory_db[app_name].get(skill_key, {
             "desc": subtask,
+            "when_to_use": "",
             "hint": "",
             "avoid": "",
             "stats": {"success": 0, "fail": 0},
@@ -122,22 +121,24 @@ def upsert_skill_success(app_name, subtask, hint_json_text):
         rec["_key"] = best  # 临时
         memory_db[app_name][best] = rec
 
-    # 解析模型输出（如果你 get_memory_prompt 输出 JSON）
-    hint, avoid = "", ""
+    # 解析模型输出
+    when_to_use, hint, avoid = "", "", ""
     try:
         m = re.search(r"\{.*\}", hint_json_text, flags=re.S)
         if m:
             obj = json.loads(m.group(0))
+            when_to_use = obj.get("when_to_use", "") or ""
             hint = obj.get("hint", "") or ""
             avoid = obj.get("avoid", "") or ""
+
     except Exception:
         pass
-
+    if when_to_use:
+        rec["when_to_use"] = when_to_use
     if hint:
         rec["hint"] = hint
     if avoid:
         rec["avoid"] = avoid
-    rec["desc"] = rec.get("desc") or subtask
     rec["stats"]["success"] = rec.get("stats", {}).get("success", 0) + 1
     rec["updated_at"] = time.time()
     rec.pop("_key", None)
@@ -151,7 +152,7 @@ def punish_skill_failure(app_name):
     rec["stats"]["fail"] = rec.get("stats", {}).get("fail", 0) + 1
     rec["updated_at"] = time.time()
 
-    # 先禁用再删除（更稳）
+    # 先禁用再删除
     if rec["stats"]["fail"] >= 2:
         rec["disabled"] = True
     if rec["stats"]["fail"] >= 4:
@@ -172,7 +173,6 @@ def save_memory_db(path, memory_db):
     os.replace(tmp, path)
 
 
-thought_history = []
 operation_history = []
 action_history = []
 important_content = ""
@@ -222,15 +222,13 @@ while True:
     output_planning = call(chat_planning, "gpt-4-turbo", api_url, key)
     chat_planning = add_response("assistant", output_planning, chat_planning)
 
-    planning = extract_json_obj(output_planning)  # 提取集合json
+    planning_json = extract_json_obj(output_planning)  # 提取集合json
+    completed = planning_json["progress"].get("completed_summary", completed)
+    completed_ids = planning_json["progress"].get("completed_ids")
+    current_app_name = planning_json["progress"].get("current_app_name", "")
+    current_subtask = planning_json["progress"].get("current_subtask", "")
 
-    planning_json = planning
-    completed = planning["progress"].get("completed_summary", completed)
-    completed_ids = planning["progress"].get("completed_ids")
-    current_app_name = planning["progress"].get("current_app_name", "")
-    current_subtask = planning["progress"].get("current_subtask", "")
-
-    if len(completed_ids) == len(planning["subtasks"]):  # 结束判断
+    if len(completed_ids) == len(planning_json["subtasks"]):  # 结束判断
         print("[Planner] No remaining subtask. Stopping.")
         all_end = time.time()
         print("\n" + "=" * 110)
@@ -240,10 +238,9 @@ while True:
     end = time.time()
     print("\n" + "=" * 50 + " Planning " + "=" * 50)
     print(f"Planning uses time: {end - start:.1f} s\n")
-    print(planning)  # 打印计划字典
+    print(planning_json)  # 打印计划字典
 
     # TODO 优化记忆命中代码
-    # 
     matches = retrieve_skill_matches(memory_db, current_app_name, current_subtask, top_k=3, min_score=0.35)
     retrieved_memory_text = format_memory_for_prompt(matches)
     # 用于后续更新/惩罚，记录本轮最相关的 skill（若有）
@@ -264,10 +261,10 @@ while True:
         add_info=add_info,
         error=error,
         completed=completed,
-        memory=important_content,
+        current_app_name=current_app_name,  # 来自 planning
+        current_subtask=current_subtask,  # 来自 planning
+        important_content=important_content,
         retrieved_memory=retrieved_memory_text,  # 检索到的记忆
-        current_app_id=current_app_name,  # 来自 planning
-        current_subtask=current_subtask  # 来自 planning
     )
 
     chat_decision = init_decision_chat()
@@ -352,7 +349,6 @@ while True:
 
     if 'A' in reflect:
         last_reflect_label = 'A'
-        thought_history.append(last_reflect_reason)
         operation_history.append(operation)
         action_history.append(action)
         error = False
@@ -366,6 +362,7 @@ while True:
         chat_memory = add_response("assistant", output_memory, chat_memory)
 
         upsert_skill_success(current_app_name, current_subtask, output_memory)
+        save_memory_db(MEMORY_PATH, memory_db)
 
     elif 'B' in reflect:
         last_reflect_label = 'B'
@@ -373,12 +370,14 @@ while True:
         controller.back(adb_path)
 
         punish_skill_failure(current_app_name)
+        save_memory_db(MEMORY_PATH, memory_db)
 
     elif 'C' in reflect:
         last_reflect_label = 'C'
         error = True
 
         punish_skill_failure(current_app_name)
+        save_memory_db(MEMORY_PATH, memory_db)
 
     step_end = time.time()
     print("\n"+"=" * 110)

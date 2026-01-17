@@ -54,7 +54,7 @@ def get_planning_prompt(
     prompt += instruction.strip() + "\n\n"
 
     prompt += "### CURRENT PLAN JSON ###\n"
-    prompt += (json.dumps(planning_json, ensure_ascii=False) if plan_json else "null") + "\n\n"
+    prompt += (json.dumps(planning_json, ensure_ascii=False) if planning_json else "null") + "\n\n"
 
     prompt += "### EXECUTION HISTORY (most recent last) ###\n"
     if operation_history:
@@ -110,10 +110,11 @@ def get_decision_prompt(
     operation_history, action_history,
     last_operation, last_action,
     add_info, error, completed,
-    memory,
-    retrieved_memory="",
-    current_app_id="",
-    current_subtask=""):
+    current_app_name,
+    current_subtask,
+    important_content,
+    retrieved_memory,
+    ):
     prompt = "### Background ###\n"
     prompt += f"This image is a phone screenshot. Its width is {width} pixels and its height is {height} pixels. The user\'s instruction is: {instruction}.\n\n"
     prompt += "The format of the coordinates is [x, y], x is the pixel from left to right and y is the pixel from top to bottom. "
@@ -145,13 +146,10 @@ def get_decision_prompt(
         prompt += "After completing the history operations, you have the following thoughts about the progress of user\'s instruction completion:\n"
         prompt += "Completed contents:\n" + completed + "\n\n"
 
-
-
-
-    if current_subtask or current_app_id:
+    if current_subtask or current_app_name:
         prompt += "### Current subtask ###\n"
         prompt += "In this iteration, you must focus on the CURRENT subtask only (not the whole instruction).\n"
-        prompt += f"Current app category: {current_app_id}\n"
+        prompt += f"Current app: {current_app_name}\n"
         prompt += f"Current subtask: {current_subtask}\n\n"
 
     if retrieved_memory != "":
@@ -160,23 +158,22 @@ def get_decision_prompt(
         prompt += "Use this as HIGH-LEVEL guidance (UI path / semantic target). Do NOT reuse old coordinates blindly.\n"
         prompt += "Always decide based on the CURRENT screenshot.\n\n"
 
+        prompt += "### Critical rule about memory ###\n"
+        prompt += "If retrieved memory contains coordinates, treat them as outdated hints.\n"
+        prompt += "You MUST re-locate the correct UI element on the current screenshot and output fresh coordinates.\n\n"
 
-    
-    if memory != "":
-        prompt += "### Memory ###\n"
+    if important_content != "":
+        prompt += "### Important Contents ###\n"
         prompt += "During the operations, you record the following contents on the screenshot for use in subsequent operations:\n"
-        prompt += "Memory:\n" + memory + "\n"
+        prompt += "Important Contents:\n" + important_content + "\n"
     
     if error:
         prompt += "### Last operation ###\n"
         prompt += f"You previously attempted to perform the operation \"{last_operation}\" by executing the Action \"{last_action}\". That action was incorrect, and its effect has already been undone. Now, you should not repeat “{last_action}” or perform a similar back-off action. Instead, re-evaluate the current screen and choose a new action that advances the task toward the goal."
         prompt += "\n\n"
 
-    prompt += "### Critical rule about memory ###\n"
-    prompt += "If retrieved memory contains coordinates, treat them as outdated hints.\n"
-    prompt += "You MUST re-locate the correct UI element on the current screenshot and output fresh coordinates.\n\n"
     prompt += "### Response requirements ###\n"
-    prompt += "Now you need to combine all of the above to perform just one action on the current page. You must choose one of the six actions below:\n"
+    prompt += "Now you need to combine all of the above to perform just one action on the current page. You must choose one of the five actions below:\n"
     prompt += "Open app 'app name' (x, y): If the current page is desktop, you can use this action to tap the position (x, y) in current page to open the app named \"app name\" on the desktop.\n"
     prompt += "Tap (x, y): Tap the position (x, y) in current page.\n"
     prompt += "Swipe (x1, y1), (x2, y2): Swipe from position (x1, y1) to position (x2, y2).\n"
@@ -185,13 +182,12 @@ def get_decision_prompt(
     else:
         prompt += "Unable to Type. You cannot use the action \"Type\" because the keyboard has not been activated. If you want to type, please first activate the keyboard by tapping on the input box on the screen.\n"
     prompt += "Home: Return to home page.\n"
-    prompt += "Stop: If you think all the requirements of user\'s instruction have been completed and no further operation is required, you can choose this action to terminate the operation process."
     prompt += "\n\n"
     
     prompt += "### Output format ###\n"
     prompt += "Your output consists of the following three parts:\n"
     prompt += "### Thought ###\nThink about the requirements that have been completed in previous operations and the requirements that need to be completed in the next one operation.\n"
-    prompt += "### Action ###\nYou can only choose one from the six actions above. Make sure that the coordinates or text in the \"()\".\n"
+    prompt += "### Action ###\nYou can only choose one from the five actions above. Make sure that the coordinates or text in the \"()\".\n"
     prompt += "### Description ###\nPlease generate a brief natural language description for the operation in Action based on your Thought."
     
     return prompt
@@ -286,7 +282,6 @@ def get_memory_prompt(
 
     prompt += "=== OUTPUT (STRICT JSON ONLY) ===\n"
     prompt += """{
-  "canonical_subtask": "<a normalized short description of the subtask>",
   "when_to_use": "<when this skill applies (conditions, app page context, keywords)>",
   "hint": "<reusable operational guidance: how to locate the target and what to do>",
   "avoid": "<common mistakes or wrong paths to avoid>"
