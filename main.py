@@ -70,36 +70,50 @@ def make_skill_key(app_name: str, canonical_desc: str) -> str:  # 为子任务�
     return f"{base[:50]}__{h}"
 
 
-def retrieve_skill_matches(memory_db, app_name: str, query_subtask: str, top_k=3, min_score=0.35):
+def retrieved_memory(memory_db, app_name: str, subtask: str, top_k=3, min_score=0.35):
     # TODO 考虑优化
     # 从记忆中匹配，按照相似度得分计算top k
-    matches = []
-    app_mem = memory_db.get(app_name, {})
+    app_mem = memory_db.get(app_name, {}) if app_name else {}
+    candidates = []
+
     for skill_key, rec in app_mem.items():
         if rec.get("disabled", False):
             continue
-        score = similarity(query_subtask, rec.get("desc", ""))
+        desc = rec.get("desc", "") or ""
+        score = similarity(subtask, desc)
         if score >= min_score:
-            matches.append((score, skill_key, rec))
-    matches.sort(reverse=True, key=lambda x: x[0])
-    return matches[:top_k]
+            candidates.append((float(score), str(skill_key), rec))
 
-# TODO 放在决策的prompt中
-def format_memory_for_prompt(matches):
-    if not matches:
-        return ""
-    lines = []
-    lines.append("Relevant long-term skills (REFERENCE ONLY; do NOT copy coordinates blindly):")
-    for score, skill_key, rec in matches:
+    candidates.sort(key=lambda x: x[0], reverse=True)
+    selected = candidates[:max(0, int(top_k))] if top_k is not None else candidates
+
+    items = []
+    for score, skill_key, rec in selected:
+        desc = (rec.get("desc", "") or "").replace("\n", " ").strip()
+        when_to_use = (rec.get("when_to_use", "") or "").replace("\n", " ").strip()
         hint = (rec.get("hint", "") or "").replace("\n", " ").strip()
         avoid = (rec.get("avoid", "") or "").replace("\n", " ").strip()
-        desc = (rec.get("desc", "") or "").replace("\n", " ").strip()
-        lines.append(f"- [score={score:.2f}] key='{skill_key}' desc='{desc}'")
-        if hint:
-            lines.append(f"  hint: {hint}")
-        if avoid:
-            lines.append(f"  avoid: {avoid}")
-    return "\n".join(lines)
+
+        item = {
+            "score": score,
+            "skill_key": skill_key,
+            "desc": desc,
+            "when_to_use": when_to_use,
+            "hint": hint,
+            "avoid": avoid,
+            "stats": rec.get("stats", {}),
+            "updated_at": rec.get("updated_at", None),
+        }
+        items.append(item)
+
+    payload = {
+        "has_memory": len(items) > 0,
+        "query": {"app_name": app_name, "subtask": subtask},
+        "top": items[0] if items else None,
+        "items": items,
+    }
+    best_skill_key = items[0]["skill_key"] if items else None
+    return payload, best_skill_key
 
 
 def upsert_skill_success(app_name, subtask, hint_json_text):
@@ -215,7 +229,6 @@ while True:
         completed_summary=completed,
         last_reflect_label=last_reflect_label,
         last_reflect_reason=last_reflect_reason,
-        error=error,
     )
     chat_planning = init_chat()
     chat_planning = add_response("user", prompt_planning, chat_planning)
@@ -241,11 +254,9 @@ while True:
     print(planning_json)  # 打印计划字典
 
     # TODO 优化记忆命中代码
-    matches = retrieve_skill_matches(memory_db, current_app_name, current_subtask, top_k=3, min_score=0.35)
-    retrieved_memory_text = format_memory_for_prompt(matches)
-    # 用于后续更新/惩罚，记录本轮最相关的 skill（若有）
-    used_memory = len(matches) > 0
-    best_skill_key = matches[0][1] if used_memory else None
+    memory_payload, best_skill_key = retrieved_memory(memory_db, current_app_name, current_subtask, top_k=3, min_score=0.35)
+    retrieved_memory_json = json.dumps(memory_payload, ensure_ascii=False)
+    used_memory = len(memory_payload) > 0
 
     # 决策 Decision #################################
     start = time.time()
@@ -259,12 +270,14 @@ while True:
         last_operation=operation,
         last_action=action,
         add_info=add_info,
+        last_reflect_label=last_reflect_label,
+        last_reflect_reason=last_reflect_reason,
         error=error,
         completed=completed,
         current_app_name=current_app_name,  # 来自 planning
         current_subtask=current_subtask,  # 来自 planning
         important_content=important_content,
-        retrieved_memory=retrieved_memory_text,  # 检索到的记忆
+        retrieved_memory=retrieved_memory_json,  # 检索到的记忆
     )
 
     chat_decision = init_decision_chat()
@@ -311,12 +324,6 @@ while True:
     
     elif "Home" in action:
         home(adb_path)
-        
-    elif "Stop" in action:
-        all_end = time.time()
-        print("\n" + "=" * 110)
-        print(f"All operations use time: {all_end-all_start:.1f} s")
-        break
 
     # todo：增加ui刷新的判断
     time.sleep(3)  # 等待设备ui刷新

@@ -10,7 +10,6 @@ def get_planning_prompt(
     completed_summary: str,
     last_reflect_label: str,
     last_reflect_reason: str,
-    error: bool,
 ):
     prompt = "You are a mobile GUI agent PLANNER. Your job is NOT to decide coordinates.\n"
 
@@ -70,10 +69,9 @@ def get_planning_prompt(
     prompt += (completed_summary.strip() if completed_summary else "") + "\n\n"
 
     prompt += "### LAST REFLECTION RESULT ###\n"
-    prompt += f"label={last_reflect_label}, error={error}, reason={last_reflect_reason}\n\n"
+    prompt += f"label={last_reflect_label}(A means The result of Operation meets the expectation; B means the Operation results in a wrong page; C means The Operation produces no changes). Reason={last_reflect_reason}\n\n"
 
     prompt += "### PLANNING RULES ###\n"
-
     prompt += "1) Update each subtask.done and progress based on the EXECUTION HISTORY and COMPLETED SUMMARY.\n"
     prompt += "2) Select current task as the first subtask with done=false.\n"
     prompt += "3) If error=True: consider whether remaining subtasks require revision.\n"
@@ -109,15 +107,22 @@ def get_decision_prompt(
     instruction, width, height, keyboard,
     operation_history, action_history,
     last_operation, last_action,
-    add_info, error, completed,
+    add_info,
+    last_reflect_label, last_reflect_reason, error, completed,
     current_app_name,
     current_subtask,
     important_content,
     retrieved_memory,
     ):
     prompt = "### Background ###\n"
-    prompt += f"This image is a phone screenshot. Its width is {width} pixels and its height is {height} pixels. The user\'s instruction is: {instruction}.\n\n"
+    prompt += f"The image is a phone screenshot. Its width is {width} pixels and its height is {height} pixels. The user\'s instruction is: {instruction}.\n\n"
     prompt += "The format of the coordinates is [x, y], x is the pixel from left to right and y is the pixel from top to bottom. "
+
+    if current_subtask or current_app_name:
+        prompt += "### Current subtask ###\n"
+        prompt += "In this iteration, you must focus on the CURRENT subtask only (not the whole instruction).\n"
+        prompt += f"Current app: {current_app_name}\n"
+        prompt += f"Current subtask: {current_subtask}\n\n"
 
     prompt += "### Keyboard status ###\n"
     prompt += "We extract the keyboard status of the current screenshot and it is whether the keyboard of the current screenshot is activated.\n"
@@ -146,13 +151,9 @@ def get_decision_prompt(
         prompt += "After completing the history operations, you have the following thoughts about the progress of user\'s instruction completion:\n"
         prompt += "Completed contents:\n" + completed + "\n\n"
 
-    if current_subtask or current_app_name:
-        prompt += "### Current subtask ###\n"
-        prompt += "In this iteration, you must focus on the CURRENT subtask only (not the whole instruction).\n"
-        prompt += f"Current app: {current_app_name}\n"
-        prompt += f"Current subtask: {current_subtask}\n\n"
 
-    if retrieved_memory != "":
+
+    if retrieved_memory:
         prompt += "### Retrieved memory (reference only) ###\n"
         prompt += retrieved_memory + "\n"
         prompt += "Use this as HIGH-LEVEL guidance (UI path / semantic target). Do NOT reuse old coordinates blindly.\n"
@@ -166,7 +167,9 @@ def get_decision_prompt(
         prompt += "### Important Contents ###\n"
         prompt += "During the operations, you record the following contents on the screenshot for use in subsequent operations:\n"
         prompt += "Important Contents:\n" + important_content + "\n"
-    
+
+    prompt += "### LAST REFLECTION RESULT ###\n"
+    prompt += f"label={last_reflect_label}(A means The result of Operation meets the expectation; B means the Operation results in a wrong page; C means The Operation produces no changes). Reason={last_reflect_reason}\n\n"
     if error:
         prompt += "### Last operation ###\n"
         prompt += f"You previously attempted to perform the operation \"{last_operation}\" by executing the Action \"{last_action}\". That action was incorrect, and its effect has already been undone. Now, you should not repeat “{last_action}” or perform a similar back-off action. Instead, re-evaluate the current screen and choose a new action that advances the task toward the goal."
