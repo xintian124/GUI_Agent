@@ -199,7 +199,7 @@ planning_json = None
 completed = ""
 
 last_reflect_label = ""     # A / B / C
-last_reflect_reason = ""    # optional short text
+last_reflect_thought = ""    # optional short text
 error = False
 
 MEMORY_PATH = "./memory_db.json"
@@ -228,7 +228,7 @@ while True:
         action_history=action_history,
         completed_summary=completed,
         last_reflect_label=last_reflect_label,
-        last_reflect_reason=last_reflect_reason,
+        last_reflect_reason=last_reflect_thought,
     )
     chat_planning = init_chat()
     chat_planning = add_response("user", prompt_planning, chat_planning)
@@ -261,17 +261,12 @@ while True:
     # 决策 Decision #################################
     start = time.time()
     prompt_decision = get_decision_prompt(
-        instruction=instruction,
-        width=width,
-        height=height,
+        instruction=instruction, width=width, height=height,
         keyboard=keyboard,
-        operation_history=operation_history,
-        action_history=action_history,
-        last_operation=operation,
-        last_action=action,
+        operation_history=operation_history, action_history=action_history,
+        last_operation=operation, last_action=action,
         add_info=add_info,
-        last_reflect_label=last_reflect_label,
-        last_reflect_reason=last_reflect_reason,
+        last_reflect_label=last_reflect_label, last_reflect_reason=last_reflect_thought,
         error=error,
         completed=completed,
         current_app_name=current_app_name,  # 来自 planning
@@ -340,7 +335,7 @@ while True:
 
     # 反思 reflection
     start = time.time()
-    prompt_reflect = get_reflect_prompt(instruction, width, height, last_keyboard, keyboard, operation, action, add_info)
+    prompt_reflect = get_reflect_prompt(instruction, width, height, last_keyboard, keyboard, operation, action, add_info, important_content=important_content, current_app_name=current_app_name, current_subtask=current_subtask)
     chat_reflect = init_chat()
     chat_reflect = add_response_two_image("user", prompt_reflect, chat_reflect, [last_screenshot_file, screenshot_file])
     output_reflect = call(chat_reflect, 'gpt-4o', api_url, key)
@@ -351,18 +346,18 @@ while True:
     print(f"Reflection uses time: {end-start:.1f} s\n")
     print(output_reflect)  # thought
 
-    last_reflect_reason = output_reflect.split("### Thought ###")[-1].split("### Answer ###")[0].replace("\n", " ").replace(":","").replace("  ", " ").strip()
-    reflect = output_reflect.split("### Answer ###")[-1].replace("\n", " ").strip()
+    last_reflect_thought = output_reflect.split("### Thought ###")[-1].split("### Answer ###")[0].replace("\n", " ").replace(":", "").replace("  ", " ").strip()
+    answer = output_reflect.split("### Answer ###")[-1].split("### Important content ###")[0].replace("\n", " ").replace(":", "").replace("  ", " ").strip()
+    important_content = output_reflect.split("### Important content ###")[-1].replace("\n", " ").strip()
 
-    if 'A' in reflect:
+    if 'A' in answer:
         last_reflect_label = 'A'
         operation_history.append(operation)
         action_history.append(action)
         error = False
 
         # 生成/刷新“长期技能记忆”
-        prompt_memory = get_memory_prompt(instruction, current_app_name, current_subtask,
-                                          last_reflect_reason, operation, action)
+        prompt_memory = get_memory_prompt(instruction, current_app_name, current_subtask, last_reflect_thought, operation, action)
         chat_memory = init_chat()
         chat_memory = add_response("user", prompt_memory, chat_memory)
         output_memory = call(chat_memory, "gpt-4o", api_url, key)
@@ -371,7 +366,7 @@ while True:
         upsert_skill_success(current_app_name, current_subtask, output_memory)
         save_memory_db(MEMORY_PATH, memory_db)
 
-    elif 'B' in reflect:
+    elif 'B' in answer:
         last_reflect_label = 'B'
         error = True
         controller.back(adb_path)
@@ -379,7 +374,7 @@ while True:
         punish_skill_failure(current_app_name)
         save_memory_db(MEMORY_PATH, memory_db)
 
-    elif 'C' in reflect:
+    elif 'C' in answer:
         last_reflect_label = 'C'
         error = True
 

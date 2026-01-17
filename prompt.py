@@ -151,8 +151,7 @@ def get_decision_prompt(
         prompt += "After completing the history operations, you have the following thoughts about the progress of user\'s instruction completion:\n"
         prompt += "Completed contents:\n" + completed + "\n\n"
 
-
-
+    # TODO 需要再确认
     if retrieved_memory:
         prompt += "### Retrieved memory (reference only) ###\n"
         prompt += retrieved_memory + "\n"
@@ -168,7 +167,7 @@ def get_decision_prompt(
         prompt += "During the operations, you record the following contents on the screenshot for use in subsequent operations:\n"
         prompt += "Important Contents:\n" + important_content + "\n"
 
-    prompt += "### LAST REFLECTION RESULT ###\n"
+    prompt += "### Last Reflection Result ###\n"
     prompt += f"label={last_reflect_label}(A means The result of Operation meets the expectation; B means the Operation results in a wrong page; C means The Operation produces no changes). Reason={last_reflect_reason}\n\n"
     if error:
         prompt += "### Last operation ###\n"
@@ -196,55 +195,68 @@ def get_decision_prompt(
     return prompt
 
 
-def get_reflect_prompt(instruction, width, height, keyboard1, keyboard2, operation, action, add_info):
-    prompt = f"These images are two phone screenshots before and after an operation. Their widths are {width} pixels and their heights are {height} pixels.\n\n"
-    
-    prompt += "In order to help you better perceive the content in this screenshot, we extract some information on the current screenshot through system files. "
-    prompt += "The information consists of two parts, consisting of format: coordinates; content. "
-    prompt += "The format of the coordinates is [x, y], x is the pixel from left to right and y is the pixel from top to bottom; the content is a text or an icon description respectively "
-    prompt += "The keyboard status is whether the keyboard of the current page is activated."
-    prompt += "\n\n"
-    
+def get_reflect_prompt(
+    instruction, width, height,
+    keyboard1, keyboard2,
+    operation, action,
+    add_info,
+    current_app_name, current_subtask,
+    important_content
+):
+    prompt = ""
+    prompt += f"These images are two phone screenshots BEFORE and AFTER one operation. Width={width}px, Height={height}px.\n\n"
+    prompt += "Coordinates format is (x, y): x is left-to-right pixels, y is top-to-bottom pixels.\n"
+    prompt += "Keyboard status indicates whether the on-screen keyboard is activated.\n\n"
+
+    prompt += "### Task context ###\n"
+    prompt += f"User instruction: {instruction}\n"
+    if current_app_name or current_subtask:
+        prompt += f"Current app category: {current_app_name}\n"
+        prompt += f"Current subtask: {current_subtask}\n"
+    if add_info:
+        prompt += f"Additional requirements / hints: {add_info}\n"
+    prompt += "\n"
+
     prompt += "### Before the current operation ###\n"
-    prompt += "Screenshot information:\n"
+    prompt += "Keyboard status: "
+    prompt += "Activated.\n\n" if keyboard1 else "Not activated.\n\n"
 
-    prompt += "Keyboard status:\n"
-    if keyboard1:
-        prompt += f"The keyboard has been activated."
-    else:
-        prompt += "The keyboard has not been activated."
-    prompt += "\n\n"
-            
     prompt += "### After the current operation ###\n"
-    prompt += "Screenshot information:\n"
+    prompt += "Keyboard status: "
+    prompt += "Activated.\n\n" if keyboard2 else "Not activated.\n\n"
 
-    prompt += "Keyboard status:\n"
-    if keyboard2:
-        prompt += f"The keyboard has been activated."
-    else:
-        prompt += "The keyboard has not been activated."
-    prompt += "\n\n"
-    
     prompt += "### Current operation ###\n"
-    prompt += f"The user\'s instruction is: {instruction}. You also need to note the following requirements: {add_info}. In the process of completing the requirements of instruction, an operation is performed on the phone. Below are the details of this operation:\n"
-    prompt += "Operation thought: " + operation.split(" to ")[0].strip() + "\n"
-    prompt += "Operation action: " + action
-    prompt += "\n\n"
-    
+    prompt += "Operation description: " + operation.split(" to ")[0].strip() + "\n"
+    prompt += "Operation action: " + action + "\n\n"
+
+    prompt += "### Important content memory (existing) ###\n"
+    prompt += "This is the current stored important content. You must keep it unchanged unless you are sure the operation succeeded (Answer=A) and you extracted NEW useful information.\n"
+    prompt += (important_content.strip() if important_content else "(empty)") + "\n\n"
+
     prompt += "### Response requirements ###\n"
-    prompt += "Now you need to output the following content based on the screenshots before and after the current operation:\n"
-    prompt += "Whether the result of the \"Operation action\" meets your expectation of \"Operation thought\"?\n"
-    prompt += "A: The result of the \"Operation action\" meets my expectation of \"Operation thought\".\n"
-    prompt += "B: The \"Operation action\" results in a wrong page and I need to return to the previous page.\n"
-    prompt += "C: The \"Operation action\" produces no changes."
-    prompt += "\n\n"
-    
+    prompt += "1) Judge whether the result of the Operation action meets the expectation of Operation thought, by comparing the before/after screenshots.\n"
+    prompt += "Choose exactly ONE:\n"
+    prompt += "A: The result meets my expectation (operation succeeded / meaningful progress).\n"
+    prompt += "B: The action leads to a wrong page/state and we should return to the previous page.\n"
+    prompt += "C: The action produces no visible change / no progress.\n\n"
+
+    prompt += "2) Update Important content:\n"
+    prompt += "- If Answer is A: extract and APPEND any new reusable information from the screenshots relevant to finishing the instruction/subtasks.\n"
+    prompt += "  Examples: temperature/weather results, addresses, contact names, search results, account IDs, order numbers, confirmation messages, route summary, key settings state.\n"
+    prompt += "- If Answer is B or C: output the Important content EXACTLY as given (no edits).\n"
+    prompt += "- Do NOT add coordinates. Do NOT add speculation. Only add information that is clearly visible or logically confirmed by the operation result.\n\n"
+
     prompt += "### Output format ###\n"
-    prompt += "Your output format is:\n"
-    prompt += "### Thought ###\nYour thought about the question\n"
-    prompt += "### Answer ###\nA or B or C"
-    
+    prompt += "Your output MUST contain exactly these three blocks:\n"
+    prompt += "### Thought ###\n"
+    prompt += "Brief reasoning about why A/B/C.\n"
+    prompt += "### Answer ###\n"
+    prompt += "A or B or C\n"
+    prompt += "### Important content ###\n"
+    prompt += "If Answer=A: the updated important content (old + new appended). If Answer=B/C: output the original important content unchanged.\n"
+
     return prompt
+
 
 
 # memory
